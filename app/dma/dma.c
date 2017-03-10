@@ -3,7 +3,7 @@
 #include <string.h>
 
 
-u8 ReceiBuff[BUF_SIZE/3];  //数据缓冲区
+u8 ReceiBuff[BUF_SIZE];  //数据缓冲区
 u8 SendBuff[BUF_SIZE*2];  //数据缓冲区
 
 
@@ -81,12 +81,12 @@ void dma_init(void)
 /*******DMA接收中断函数*******/
 void DMA1_Channel6_IRQHandler(void)
 {
-    int temp = 0;  
+ 
     DMA_Cmd(DMA1_Channel6, DISABLE);       // 关闭DMA ，防止干扰
 
     DMA_ClearFlag( DMA1_FLAG_GL6 );        // 清DMA标志位
 
-    temp = BUF_SIZE - DMA_GetCurrDataCounter(DMA1_Channel6); //获得接收到的字节数
+    //temp = BUF_SIZE - DMA_GetCurrDataCounter(DMA1_Channel6); //获得接收到的字节数
     
     DMA1_Channel6->CNDTR = BUF_SIZE;        //  重新赋值计数值，必须大于等于最大可能接收到的数据帧数目
 

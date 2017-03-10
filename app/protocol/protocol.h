@@ -8,7 +8,6 @@
 #include <string.h>
 #include <stm32f10x.h>
 #include "dma/dma.h"
-#include "protocol/protocol.h"
 
 /**
 * @name 日志打印宏定义

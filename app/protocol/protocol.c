@@ -478,6 +478,15 @@ int32_t gizwitsSetMode(uint8_t mode)
     return ret;
 }
 
+void delay_ms(u16 time)
+{    
+   u16 i=0;  
+   while(time--)
+   {
+      i=12000;  
+      while(i--) ;    
+   }
+}
 /**
 * @brief 从DMA接收缓冲区中抓取一包数据
 *
@@ -487,16 +496,18 @@ int32_t gizwitsSetMode(uint8_t mode)
 *
 * @return : 0,正确返回;-1，错误返回;-2，数据校验失败
 */
+static uint8_t erropCount = 0;
 static int8_t gizProtocolGetOnePacket(u8 *rb, uint8_t *data, uint16_t *len)
 {
     uint8_t sum = 0;
-    uint8_t i = 0;
+    uint8_t i = 0,temp = 0;
     uint8_t tmpData;
     uint16_t tmpCount = 0;
     static uint8_t protocolFlag = 0;
     static uint16_t protocolCount = 0;
     static uint8_t lastData = 0;
-    static uint8_t debugCount = 0;
+    static uint8_t debugCount=0;
+    
     uint8_t *protocolBuff = data;
     protocolHead_t *head = NULL;
 
@@ -505,8 +516,12 @@ static int8_t gizProtocolGetOnePacket(u8 *rb, uint8_t *data, uint16_t *len)
         printf("gizProtocolGetOnePacket Error , Illegal Param\n");
         return -1;
     }
-    for(i=0;i<50;i++)
-    {
+    temp = BUF_SIZE - DMA_GetCurrDataCounter(DMA1_Channel6); //获得接收到的字节数
+    if(temp < 5){
+      return 1;
+    }
+    for(i=0;i<150;i++)
+    {     
       tmpData = rb[i];
       if((0xFF == lastData) && (0xFF == tmpData))
       {
@@ -519,12 +534,12 @@ static int8_t gizProtocolGetOnePacket(u8 *rb, uint8_t *data, uint16_t *len)
           }
           else
           {
-//              if((protocolCount > 4) && (protocolCount != tmpCount))
-//              {
-//                  protocolBuff[0] = 0xFF;
-//                  protocolBuff[1] = 0xFF;
-//                  protocolCount = 2;
-//              }
+              if((protocolCount > 4) && (protocolCount != tmpCount))
+              {
+                  protocolBuff[0] = 0xFF;
+                  protocolBuff[1] = 0xFF;
+                  protocolCount = 2;
+              }
           }
       }
       else if((0xFF == lastData) && (0x55 == tmpData))
@@ -541,18 +556,23 @@ static int8_t gizProtocolGetOnePacket(u8 *rb, uint8_t *data, uint16_t *len)
               {
                   head = (protocolHead_t *)protocolBuff;
                   tmpCount = gizProtocolExchangeBytes(head->len)+4;
+                  if(tmpCount>temp)
+                  {
+                    erropCount++;
+                    return 1;
+                  } 
                   if(protocolCount == tmpCount)
                   {
-                      break;
+                    printf("\nhead:%x\n",head->cmd);  
+                    break;
                   }
               }
           }
       }
 
       lastData = tmpData;
-      debugCount++;
     }
-    
+
     if((protocolCount > 4) && (protocolCount == tmpCount))
     {
         sum = gizProtocolSum(protocolBuff, protocolCount);
@@ -565,18 +585,18 @@ static int8_t gizProtocolGetOnePacket(u8 *rb, uint8_t *data, uint16_t *len)
 
             protocolCount = 0;
             debugCount = 0;
+            erropCount = 0;
             lastData = 0;
             return 0;
         }
         else
-        { 
-            printf("sum error:");
-            for(i = 0;i<50;i++)
+        {  
+          printf("sum error[rb]=:");
+            for(i=0;i<tmpCount;i++)
             {
-              printf("%x",rb[i]);
+              printf("%02x",protocolBuff[i]);
             }
             printf("\n");
-            printf("head->len=%d\n",head->len);
             return -2;
         }
     } 
@@ -685,7 +705,15 @@ static int8_t gizProtocolIssuedProcess(uint8_t *inData, uint32_t inLen, uint8_t 
 
     return 0;
 }
+void DMA_Resart(void)
+{
+  DMA_Cmd(DMA1_Channel6, DISABLE);       // 关闭DMA ，防止干扰
+  memset(ReceiBuff, 0, BUF_SIZE);
+  
+  DMA1_Channel6->CNDTR = BUF_SIZE;       //  重新赋值计数值，必须大于等于最大可能接收到的数据帧数目
 
+  DMA_Cmd(DMA1_Channel6, ENABLE);        // DMA 开启，等待数据。
+}
 /********************************
 @brief  :接收协议数据处理与用户数据上传
 @param  :currentData 用户数据       
@@ -699,24 +727,27 @@ int protocolHandle(dataPoint_t *currentData)
   protocolHead_t *recvHead = NULL;
   
   ret = gizProtocolGetOnePacket(ReceiBuff,gizwitsProtocol.protocolBuf, &protocolLen);
-  memset(ReceiBuff, 0, BUF_SIZE/3);
-  
+  if(erropCount>8)
+  {
+    erropCount = 0;
+    //DMA_Resart();
+    //printf("receive error more than 3\n");
+  }
   if(ret == 0)
   {
 #ifdef PRINTFPROTOCOL  //打印接收到的数据包
   printf("get one backpack\n");
   printf("WIFI to MCU:");
-  for(int i=0;i<protocolLen;i++) printf("%x",gizwitsProtocol.protocolBuf[i]);
+  for(int i=0;i<protocolLen;i++) printf("%02x",gizwitsProtocol.protocolBuf[i]);
   printf("\n");
 #endif
 
     recvHead = (protocolHead_t *)gizwitsProtocol.protocolBuf;
-
+    DMA_Resart();
     switch(recvHead->cmd)
     {
       case CMD_GET_DEVICE_INTO:   //WiFi模组获取设备信息  命令0x01
         gizProtocolGetDeviceInfo(recvHead);
-        printf("cmd=0x01\n");
         break;
         
       case CMD_ISSUED_P0://wifi模组控制设备		命令0x03
@@ -724,20 +755,18 @@ int protocolHandle(dataPoint_t *currentData)
         {
             gizProtocolCommonAck(recvHead);
         }
-        printf("cmd=0x03\n");
         break;
               
       case CMD_HEARTBEAT://WiFi心跳维持		命令0x07
         gizProtocolCommonAck(recvHead);
-        printf("cmd=0x07\n");
         break;
       
       case CMD_WIFISTATUS://wifi模组将当前其工作状态推送给mcu
         gizProtocolCommonAck(recvHead);
         //处理WiFi工作状态 ——————————暂不处理
-        printf("cmd=0x0d\n");
         break;
-
+      default:
+        break;
     }
   }
   else if(ret == -2)
@@ -772,12 +801,13 @@ int protocolHandle(dataPoint_t *currentData)
             break;      
    }
   
-  if(0 == (gizGetTimerCount() % (1000*60*10)))
+  /*if(0 == (gizGetTimerCount() % (1000*60*10)))
   {
       printf("Info: 600S report data\n");
       gizReportData(ACTION_REPORT_DEV_STATUS, (uint8_t *)&gizwitsProtocol.reportData.devStatus, sizeof(devStatus_t));
       memcpy((uint8_t *)&gizwitsProtocol.gizLastDataPoint, (uint8_t *)currentData, sizeof(dataPoint_t));
   }
-  memset(gizwitsProtocol.protocolBuf, 0, protocolLen);
+  memset(gizwitsProtocol.protocolBuf, 0, protocolLen);*/
+  
   return  1;
 }
